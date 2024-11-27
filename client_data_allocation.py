@@ -9,8 +9,9 @@ import pdb
 num_clients = int(sys.argv[1])
 diff_quantity = int(sys.argv[2])
 
-np.random.seed(42)
-random.seed(42)
+seed = 42
+np.random.seed(seed)
+random.seed(seed)
 
 # Divide the entire dataset into a training set and a test set.
 df = pd.read_json("new-databricks-dolly-15k.json", orient='records')
@@ -19,6 +20,7 @@ df = pd.read_json("new-databricks-dolly-15k.json", orient='records')
 alpaca_df = pd.read_json("alpaca_data.json", orient='records')
 alpaca_df.rename(columns={'output': 'response',"input":"context"}, inplace=True)
 alpaca_df["category"] = "alpaca"
+alpaca_df = alpaca_df.sample(n=15000, random_state=seed)
 
 #combining alpaca and dolly
 df = pd.concat([df, alpaca_df], ignore_index=True, sort=False)
