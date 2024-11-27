@@ -22,14 +22,23 @@ alpaca_df.rename(columns={'output': 'response',"input":"context"}, inplace=True)
 alpaca_df["category"] = "alpaca"
 alpaca_df = alpaca_df.sample(n=15000, random_state=seed)
 
-#combining alpaca and dolly
-df = pd.concat([df, alpaca_df], ignore_index=True, sort=False)
-
+# dividing into test and train for dolly
 sorted_df = df.sort_values(by=['category'])
 grouped = sorted_df.groupby('category')
 sampled_df = grouped.apply(lambda x: x.sample(n=10))
 sampled_df = sampled_df.reset_index(level=0, drop=True)
 remaining_df = sorted_df.drop(index=sampled_df.index)
+
+# dividing into test and train for alpaca
+alpaca_sorted_df = alpaca_df.sort_values(by=['category'])
+alpaca_grouped = alpaca_sorted_df.groupby('category')
+alpaca_sampled_df = alpaca_grouped.apply(lambda x: x.sample(n=80))
+alpaca_sampled_df = alpaca_sampled_df.reset_index(level=0, drop=True)
+alpaca_remaining_df = alpaca_sorted_df.drop(index=alpaca_sampled_df.index)
+
+#combining alpaca and dolly
+sampled_df = pd.concat([sampled_df, alpaca_sampled_df], ignore_index=True, sort=False)
+remaining_df = pd.concat([remaining_df, alpaca_remaining_df], ignore_index=True, sort=False)
 
 sampled_df = sampled_df.reset_index().drop('index', axis=1)
 remaining_df = remaining_df.reset_index().drop('index', axis=1)
