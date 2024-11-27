@@ -13,8 +13,16 @@ np.random.seed(42)
 random.seed(42)
 
 # Divide the entire dataset into a training set and a test set.
-
 df = pd.read_json("new-databricks-dolly-15k.json", orient='records')
+
+# Preprocessing Alpaca dataset into dolly format
+alpaca_df = pd.read_json("alpaca_data.json", orient='records')
+alpaca_df.rename(columns={'output': 'response',"input":"context"}, inplace=True)
+alpaca_df["category"] = "alpaca"
+
+#combining alpaca and dolly
+df = pd.concat([df, alpaca_df], ignore_index=True, sort=False)
+
 sorted_df = df.sort_values(by=['category'])
 grouped = sorted_df.groupby('category')
 sampled_df = grouped.apply(lambda x: x.sample(n=10))
