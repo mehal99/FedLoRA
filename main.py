@@ -12,6 +12,11 @@ from peft import (
 from fed_utils import FedAvg, client_selection, global_evaluation, GeneralClient
 import datasets
 from utils.prompter import Prompter
+import json
+
+file_path = './HF_key.json'
+with open(file_path, 'r') as file:
+    keys = json.load(file)
 
 datasets.utils.logging.set_verbosity_error()
 
@@ -91,18 +96,52 @@ def fl_finetune(
         device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
         gradient_accumulation_steps = gradient_accumulation_steps // world_size
 
-    model = LlamaForCausalLM.from_pretrained(
-        global_model,
-        load_in_8bit=True,
-        torch_dtype=torch.float16,
-        device_map=device_map,
-    )
+    # model = LlamaForCausalLM.from_pretrained(
+    #     global_model,
+    #     load_in_8bit=True,
+    #     torch_dtype=torch.float16,
+    #     device_map=device_map,
+    # )
 
-    tokenizer = LlamaTokenizer.from_pretrained(global_model)
+    # tokenizer = LlamaTokenizer.from_pretrained(global_model)
+
+    if global_model == 'gpt2':
+        model = GPT2LMHeadModel.from_pretrained(
+            global_model,
+            load_in_8bit=False,
+            torch_dtype=torch.float32,
+            device_map=device_map,
+        )
+    elif global_model == 'google/gemma-2b' or global_model == 'google/gemma-7b':
+        model = AutoModelForCausalLM.from_pretrained(
+            global_model,
+            load_in_8bit=False,
+            torch_dtype=torch.float32,
+            device_map=device_map,
+            token=keys["hf_token"],
+        )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            global_model,
+            load_in_8bit=False,
+            torch_dtype=torch.float32,
+            device_map=device_map,
+            token=keys["hf_token"],
+        )
+
+    if global_model == 'gpt2':
+        tokenizer = GPT2Tokenizer.from_pretrained(global_model)
+    elif global_model == 'google/gemma-2b' or global_model == 'google/gemma-7b':
+        tokenizer = AutoTokenizer.from_pretrained(global_model, token=keys["hf_token"])
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(global_model, token=keys["hf_token"])
+
     tokenizer.pad_token_id = (
         0
     )
     tokenizer.padding_side = "left"
+
+    
 
     def tokenize(prompt, add_eos_token=True):
         result = tokenizer(
