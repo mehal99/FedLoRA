@@ -20,6 +20,7 @@ def fl_finetune(
         # model/data params
         global_model: str = '',
         data_path: str = './data',
+        dev_data_path: str = './mmlu_test_1444.jsonl'
         output_dir: str = './lora-shepherd/',
         # FL hyperparamas
         client_selection_strategy: str = 'random',
@@ -164,6 +165,8 @@ def fl_finetune(
     local_dataset_len_dict = dict()
     output_dir = os.path.join(output_dir, str(num_clients))
 
+    acc_list = []
+
     for epoch in tqdm(range(num_communication_rounds)):
 
         print("\nConducting the client selection")
@@ -205,7 +208,21 @@ def fl_finetune(
         config.save_pretrained(output_dir)
 
         # Please design the evaluation method based on your specific requirements in the fed_utils/evaluation.py file.
-        global_evaluation()
+        acc = global_evaluation(model, tokenizer, prompter, dev_data_path)
+        print('Acc of Epoch', str(epoch), 'is:', acc)
+        acc_list.append(acc)
+
+
+    print(acc_list)          
+    #os.system("lm_eval --model_args pretrained=huggyllama/llama-7b,parallelize=True,load_in_4bit=False,peft={current_dir} --tasks arc_challenge,mmlu --device cuda --output_path {current_dir}".format(current_dir = os.path.join(output_dir, str(epoch))))
+    filename = output_dir + 'log.txt'
+    file = open(filename,'a')
+    for i in range(len(acc_list)):
+        s = str(acc_list[i]).replace('[','').replace(']','')
+        s = s.replace("'",'').replace(',','') +'\n'
+        file.write(s)
+    file.close()
+    print("Log Saved")
 
 
 if __name__ == "__main__":
