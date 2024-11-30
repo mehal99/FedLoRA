@@ -4,11 +4,11 @@ from typing import List
 from tqdm import tqdm
 import fire
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer, LlamaForCausalLM, GPT2Tokenizer, GPT2Model, GPT2LMHeadModel, AutoConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer, LlamaForCausalLM, AutoModelForCausalLM, AutoTokenizer, GPT2LMHeadModel, GPT2Tokenizer, GPT2Model, GPT2LMHeadModel, AutoConfig
 from peft import (
     LoraConfig,
     get_peft_model,
-    prepare_model_for_int8_training,
+    prepare_model_for_kbit_training,
     PeftModel,
     AdaLoraConfig,
     AdaLoraModel,

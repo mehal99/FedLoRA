@@ -1,2 +1,8 @@
 .idea/
 HF_key.json
+data/
+__pycache__/
+output/
+lora-shepherd-Qwen3b/
+*.out
+*.sbatch
