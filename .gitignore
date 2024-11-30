@@ -1,2 +1,6 @@
 .idea/
 HF_key.json
+data/
+__pycache__/
+lora-shepherd-7b/
+*.out

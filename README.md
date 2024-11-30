@@ -35,7 +35,7 @@ We are pleased to share our [***FedIT***](https://arxiv.org/pdf/2305.05644.pdf) 
 
 ## Installation 
 
-The code requires some dependencies (Python=3.8)  as specified in `requirements.txt`. Please follow the relevant libraries to install or run:
+The code requires some dependencies (Python=~~3.8~~ 3.10)  as specified in `requirements.txt`. Please follow the relevant libraries to install or run:
 ```bash
 pip install -r requirements.txt
 ```
