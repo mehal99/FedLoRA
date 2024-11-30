@@ -2,5 +2,7 @@
 HF_key.json
 data/
 __pycache__/
-lora-shepherd-7b/
+output/
+lora-shepherd-Qwen3b/
 *.out
+*.sbatch
