@@ -1,17 +1,24 @@
 import os
+#os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
 from typing import List
 from tqdm import tqdm
 import fire
 import torch
-from transformers import LlamaTokenizer, LlamaForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer, LlamaTokenizer, LlamaForCausalLM, GPT2Tokenizer, GPT2Model, GPT2LMHeadModel, AutoConfig
 from peft import (
     LoraConfig,
     get_peft_model,
     prepare_model_for_int8_training,
+    PeftModel,
+    AdaLoraConfig,
+    AdaLoraModel,
 )
 from fed_utils import FedAvg, client_selection, global_evaluation, GeneralClient
 import datasets
 from utils.prompter import Prompter
+import numpy as np
+import random
+import copy
 import json
 
 file_path = './HF_key.json'
@@ -25,7 +32,7 @@ def fl_finetune(
         # model/data params
         global_model: str = '',
         data_path: str = './data',
-        dev_data_path: str = './mmlu_test_1444.jsonl'
+        dev_data_path: str = './mmlu_test_1444.jsonl',
         output_dir: str = './lora-shepherd/',
         # FL hyperparamas
         client_selection_strategy: str = 'random',
@@ -52,6 +59,14 @@ def fl_finetune(
         group_by_length: bool = False,
         resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
         prompt_template_name: str = "alpaca",  # The prompt template to use, will default to alpaca.
+        # aggregation mode
+        stacking: bool = False,
+        # heterogeneous
+        heter: bool = False,
+        local_ranks: List[int] = [64, 32, 16, 16, 8, 8, 4, 4, 4, 4],
+        zero_padding: bool = False,
+        Adalora: bool = False,
+        full: bool = False
 ):
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
         print(
@@ -184,16 +199,42 @@ def fl_finetune(
                                                                     ]  # could be sped up, probably
         return tokenized_full_prompt
 
-    model = prepare_model_for_int8_training(model)
-    config = LoraConfig(
-        r=lora_r,
-        lora_alpha=lora_alpha,
-        target_modules=lora_target_modules,
-        lora_dropout=lora_dropout,
-        bias="none",
-        task_type="CAUSAL_LM",
-    )
-    model = get_peft_model(model, config)
+    #model = prepare_model_for_int8_training(model)
+    if full == False:
+        if stacking == False:
+            if zero_padding:
+                config_ori = LoraConfig(
+                    base_model_name_or_path=global_model,
+                    r = max(local_ranks),
+                    lora_alpha = lora_alpha * max(local_ranks),
+                    target_modules = lora_target_modules,
+                    lora_dropout = lora_dropout,
+                    bias = "none",
+                    task_type = "CAUSAL_LM",
+                )
+            else:
+                config = LoraConfig(
+                    base_model_name_or_path=global_model,
+                    r = lora_r,
+                    lora_alpha = lora_alpha,
+                    target_modules = lora_target_modules,
+                    lora_dropout = lora_dropout,
+                    bias = "none",
+                    task_type = "CAUSAL_LM",
+                )
+            model = get_peft_model(model, config)
+        
+        else:
+            config_ori = LoraConfig(
+                base_model_name_or_path=global_model,
+                r = lora_r * num_clients,
+                lora_alpha = lora_alpha * num_clients,
+                target_modules = lora_target_modules,
+                lora_dropout = lora_dropout,
+                bias = "none",
+                task_type = "CAUSAL_LM",
+            )
+
     if not ddp and torch.cuda.device_count() > 1:
         model.is_parallelizable = True
         model.model_parallel = True
@@ -213,7 +254,65 @@ def fl_finetune(
                                                 other_info=epoch)
 
         for client_id in selected_clients_set:
-            client = GeneralClient(client_id, model, data_path, output_dir)
+            if full == False:
+                if Adalora:
+                    config = AdaLoraConfig(
+                        r=local_ranks[client_id],
+                        lora_alpha=2*local_ranks[client_id],
+                        target_modules=lora_target_modules,
+                        lora_dropout=lora_dropout,
+                        bias="none",
+                        task_type="CAUSAL_LM",                      
+                        base_model_name_or_path=global_model,
+                    )
+                    model_client = copy.deepcopy(model)
+                    model_client = get_peft_model(model_client, config)
+                else:
+                    if stacking:
+                        if heter:
+                            config = LoraConfig(
+                            r=local_ranks[client_id],
+                            lora_alpha=2*local_ranks[client_id],
+                            target_modules=lora_target_modules,
+                            lora_dropout=lora_dropout,
+                            bias="none",
+                            task_type="CAUSAL_LM",
+                            base_model_name_or_path=global_model,
+                            )
+                            model_client = copy.deepcopy(model)
+                            model_client = get_peft_model(model_client, config)
+                        else:
+                            config = LoraConfig(
+                            r=lora_r,
+                            lora_alpha=lora_alpha,
+                            target_modules=lora_target_modules,
+                            lora_dropout=lora_dropout,
+                            bias="none",
+                            task_type="CAUSAL_LM",
+                            base_model_name_or_path=global_model,
+                            )
+                            model_client = copy.deepcopy(model)
+                            model_client = get_peft_model(model_client, config)
+                    else:
+                        if heter:
+                            config = LoraConfig(
+                            r=local_ranks[client_id],
+                            lora_alpha=2*local_ranks[client_id],
+                            target_modules=lora_target_modules,
+                            lora_dropout=lora_dropout,
+                            bias="none",
+                            task_type="CAUSAL_LM",
+                            base_model_name_or_path=global_model,
+                            )
+                            model_client = copy.deepcopy(model)
+                            model_client = get_peft_model(model_client, config)
+                        else:
+                            model_client = model
+            
+            else:
+                model_client = model
+
+            client = GeneralClient(client_id, model_client, data_path, output_dir)
 
             print("\nPreparing the local dataset and trainer for Client_{}".format(client_id))
             client.preprare_local_dataset(generate_and_tokenize_prompt, local_val_set_size)
@@ -232,28 +331,71 @@ def fl_finetune(
             client.train()
 
             print("\nTerminating the local training of Client_{}".format(client_id))
-            model, local_dataset_len_dict, previously_selected_clients_set, last_client_id = client.terminate_local_training(
+            model_client, local_dataset_len_dict, previously_selected_clients_set, last_client_id = client.terminate_local_training(
                 epoch, local_dataset_len_dict, previously_selected_clients_set)
             del client
 
         print("Collecting the weights of clients and performing aggregation")
+        #local_dataset_len_dict = [1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00]
+        
         model = FedAvg(model,
                        selected_clients_set,
                        output_dir,
                        local_dataset_len_dict,
                        epoch,
+                       stacking,
+                       lora_r,
+                       heter,
+                       local_ranks,
+                       zero_padding,
+                       full
                        )
-        torch.save(model.state_dict(), os.path.join(output_dir, str(epoch), "adapter_model.bin"))
-        config.save_pretrained(output_dir)
+        
+        if full == False:
+            if stacking:
+                config_ori.save_pretrained(
+                    os.path.join(output_dir, str(epoch)),
+                    load_in_8bit=False,
+                    torch_dtype=torch.float16,
+                    device_map=device_map,
+                )
+                model = PeftModel.from_pretrained(model, os.path.join(output_dir, str(epoch)))
+            else:
+                torch.save(model.state_dict(), os.path.join(output_dir, str(epoch), "adapter_model.bin"))
+                config.save_pretrained(
+                    os.path.join(output_dir, str(epoch)),
+                    load_in_8bit=False,
+                    torch_dtype=torch.float16,
+                    device_map=device_map,
+                )
+        else:
+            config = AutoConfig.from_pretrained(global_model)
+            tokenizer.save_pretrained(os.path.join(output_dir, str(epoch)),
+                    load_in_8bit=False,
+                    torch_dtype=torch.float32,
+                    device_map=device_map,)
+            config.save_pretrained(os.path.join(output_dir, str(epoch)),
+                    load_in_8bit=False,
+                    torch_dtype=torch.float32,
+                    device_map=device_map,)
 
-        # Please design the evaluation method based on your specific requirements in the fed_utils/evaluation.py file.
+            print('save model')
+        
         acc = global_evaluation(model, tokenizer, prompter, dev_data_path)
         print('Acc of Epoch', str(epoch), 'is:', acc)
         acc_list.append(acc)
+        if stacking:
+            model = model.merge_and_unload()
+            model.save_pretrained(os.path.join(output_dir, str(epoch) + '/final'),
+                    load_in_8bit=False,
+                    torch_dtype=torch.float32,
+                    device_map=device_map,)
 
+        if epoch < (num_communication_rounds - 1):
+            rm_dir = os.path.join(output_dir, str(epoch))
+            os.system("rm -rf {xxxxx}".format(xxxxx = rm_dir))
 
     print(acc_list)          
-    #os.system("lm_eval --model_args pretrained=huggyllama/llama-7b,parallelize=True,load_in_4bit=False,peft={current_dir} --tasks arc_challenge,mmlu --device cuda --output_path {current_dir}".format(current_dir = os.path.join(output_dir, str(epoch))))
     filename = output_dir + 'log.txt'
     file = open(filename,'a')
     for i in range(len(acc_list)):
@@ -262,7 +404,6 @@ def fl_finetune(
         file.write(s)
     file.close()
     print("Log Saved")
-
 
 if __name__ == "__main__":
     fire.Fire(fl_finetune)
