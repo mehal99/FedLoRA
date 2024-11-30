@@ -241,8 +241,12 @@ def fl_finetune(
                        selected_clients_set,
                        output_dir,
                        local_dataset_len_dict,
-                       epoch,
-                       )
+                       epoch, 
+                       use_flasc=False,
+                       dl_density=1.0,
+                       ul_density=1.0, 
+                       l2_clip_norm=0.0,
+                       noise_multiplier=0.0)
         torch.save(model.state_dict(), os.path.join(output_dir, str(epoch), "adapter_model.bin"))
         config.save_pretrained(output_dir)
 
