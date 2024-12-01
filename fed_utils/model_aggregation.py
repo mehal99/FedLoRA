@@ -14,27 +14,6 @@ def FedAvg(model, selected_clients_set, output_dir, local_dataset_len_dict, epoc
                      dtype=torch.float32),
         p=1, dim=0)
 
-    # #global model parameters
-    # server_state_dict = get_peft_model_state_dict(model, adapter_name="default")
-    # server_params = {n: p.clone() for n, p in server_state_dict.items()}
-    # server_mask = {}
-
-    # #Apply download sparsification
-    # if flasc and dl_density < 1.0:
-    #     all_params_flat = torch.cat([p.view(-1) for p in server_params.values()])
-    #     server_mask_flat = get_topk_mask(all_params_flat, dl_density)
-    #     start = 0
-    #     for key, value in server_params.items():
-    #         numel = value.numel()
-    #         mask = server_mask_flat[start:start+numel].view_as(value)
-    #         server_mask[key] = mask
-    #         server_params[key] = value * mask
-    #         start += numel
-    # else:
-    #     for val in server_params:
-    #         server_mask[val] = torch.ones_like(server_params[val])
-    
-    # aggregate = None
     client_model = deepcopy(model)
 
     for k, client_id in enumerate(selected_clients_set):
@@ -49,8 +28,8 @@ def FedAvg(model, selected_clients_set, output_dir, local_dataset_len_dict, epoc
         sparse_client_weights = client_model.state_dict()
 
         #DP clipping and noise addition
-        delta_flat = torch.cat([value.view(-1) for value in sparse_client_weights.values()])
-        l2_norm = torch.norm(delta_flat, p=2).item()
+        sparse_client_flat = torch.cat([value.view(-1) for value in sparse_client_weights.values()])
+        l2_norm = torch.norm(sparse_client_flat, p=2).item()
         if l2_clip_norm > 0.0:
             divisor = max(l2_norm / l2_clip_norm, 1.0)
             for n in sparse_client_weights:
@@ -64,7 +43,7 @@ def FedAvg(model, selected_clients_set, output_dir, local_dataset_len_dict, epoc
                                        for key in
                                        sparse_client_weights.keys()}
 
-    #DP and noise addition to the aggregate
+    #DP and noise addition to the client aggregate
     if l2_clip_norm > 0.0:
         for n in weighted_sparse_client_weights:
             weighted_sparse_client_weights[n] /= l2_clip_norm
