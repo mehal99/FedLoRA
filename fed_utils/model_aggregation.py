@@ -56,92 +56,43 @@ def FedAvg(model, selected_clients_set, output_dir, local_dataset_len_dict, epoc
  
     return model
 
-def FedSA(model, selected_clients_set, output_dir, local_dataset_len_dict, epoch, flasc=False, dl_density=1.0, ul_density=1.0, l2_clip_norm=0.0, noise_multiplier=0.0):
+def FedSA(model, selected_clients_set, output_dir, local_dataset_len_dict, epoch):
 
     weights_array = normalize(
         torch.tensor([local_dataset_len_dict[client_id] for client_id in selected_clients_set],
                      dtype=torch.float32),
         p=1, dim=0)
-    
-    #global model parameters (only lora A)
-    server_state_dict = get_peft_model_state_dict(model, adapter_name="default")
-    server_params = {n: p.clone() for n, p in server_state_dict.items() if 'lora_A' in n}
-    server_mask = {}
-    
-    #Apply download sparsification
-    if flasc and dl_density < 1.0:
-        all_params_flat = torch.cat([p.view(-1) for p in server_params.values()])
-        server_mask_flat = get_topk_mask(all_params_flat.abs(), dl_density)
-        curr = 0
-        for n, p in server_params.items():
-            numel = p.numel()
-            mask = server_mask_flat[curr:curr + numel].view_as(p)
-            server_mask[n] = mask
-            server_params[n] = p * mask
-            curr += numel
-    else:
-        for n in server_params:
-            server_mask[n] = torch.ones_like(server_params[n])
 
-    aggregate = None
+    aggregated_A = {}
 
     for k, client_id in enumerate(selected_clients_set):
         single_output_dir = os.path.join(
             output_dir, str(epoch), "local_output_{}".format(client_id), "pytorch_model.bin")
         
-        client_weights = torch.load(single_output_dir)
+        single_weights = torch.load(single_output_dir)
 
-        client_params = {n: p for n, p in client_weights.items() if 'lora_A' in n}
-        
-        neg_client_delta = {}
-        for n in server_params.keys():
-            if n in client_params:
-                delta = server_params[n] - client_params[n]
-                neg_client_delta[n] = delta
-            else:
-                print(f"Parameter {n} not found in client {client_id} weights.")
-        
-        if flasc and ul_density < 1.0:
-            delta_flat = torch.cat([p.view(-1) for p in neg_client_delta.values()])
-            delta_mask_flat = get_topk_mask(delta_flat.abs(), ul_density)
-            curr = 0
-            for n, p in neg_client_delta.items():
-                numel = p.numel()
-                mask = delta_mask_flat[curr:curr + numel].view_as(p)
-                neg_client_delta[n] = p * mask
-                curr += numel
-        
-        #DP clipping and noise addition
-        delta_flat = torch.cat([p.view(-1) for p in neg_client_delta.values()])
-        delta_norm = torch.norm(delta_flat).item()
-        if l2_clip_norm > 0:
-            divisor = max(delta_norm / l2_clip_norm, 1.0)
-            for n in neg_client_delta:
-                neg_client_delta[n] = neg_client_delta[n] / divisor
-        
-        for n in neg_client_delta:
-            neg_client_delta[n] = neg_client_delta[n] * weights_array[k]
-        
-        if aggregate is None:
-            aggregate = neg_client_delta
+        A_state_dict = {key: value.clone() for key, value in single_weights.items() if 'lora_A' in key}
+
+        # Averaging
+        for key in A_state_dict.keys():
+            A_state_dict[key] *= weights_array[k]
+
+        # client 0
+        if k == 0:
+            # Initialization
+            aggregated_A = A_state_dict
         else:
-            for n in aggregate:
-                aggregate[n] += neg_client_delta[n]
-    
-    #DP and noise addition to the aggregate
-    if l2_clip_norm > 0:
-        for n in aggregate:
-            aggregate[n] = aggregate[n] / l2_clip_norm
-    if noise_multiplier > 0:
-        for n in aggregate:
-            noise = noise_multiplier * torch.randn_like(aggregate[n])
-            aggregate[n] += noise
-    
-    #Update server model
-    updated_state_dict = server_state_dict.copy()
-    for n in aggregate:
-        updated_state_dict[n] = server_state_dict[n] - aggregate[n]
-    
-    set_peft_model_state_dict(model, updated_state_dict, adapter_name="default")
-    
+            # Add the weighted LoRA A matrices from subsequent clients to the aggregated_A (Averaged)
+            for key in aggregated_A.keys():
+                aggregated_A[key] += A_state_dict[key]
+
+    # global_peft_state_dict = model.get_peft_model_state_dict()
+    global_peft_state_dict = get_peft_model_state_dict(model, adapter_name="default")
+
+    for key in aggregated_A.keys():
+        global_peft_state_dict[key] = aggregated_A[key]
+
+
+    set_peft_model_state_dict(model, global_peft_state_dict, adapter_name="default")
+
     return model
