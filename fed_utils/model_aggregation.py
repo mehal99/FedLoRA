@@ -4,17 +4,9 @@ from peft import (
 )
 import torch
 import os
+from copy import deepcopy
 from torch.nn.functional import normalize
-
-def get_topk_mask(x, density):
-    k = int(x.numel() * density)
-    if k == 0:
-        return torch.zeros_like(x)
-    else:
-        _, idx = torch.topk(x.abs().view(-1), k)
-        mask = torch.zeros_like(x.view(-1))
-        mask[idx] = 1
-        return mask.view_as(x)
+from other import get_topk_mask, sparsify_model
 
 def FedAvg(model, selected_clients_set, output_dir, local_dataset_len_dict, epoch, flasc=False, dl_density=1.0, ul_density=1.0, l2_clip_norm=0.0, noise_multiplier=0.0):
     weights_array = normalize(
@@ -22,86 +14,66 @@ def FedAvg(model, selected_clients_set, output_dir, local_dataset_len_dict, epoc
                      dtype=torch.float32),
         p=1, dim=0)
 
-    #global model parameters
-    server_state_dict = get_peft_model_state_dict(model, adapter_name="default")
-    server_params = {n: p.clone() for n, p in server_state_dict.items()}
-    server_mask = {}
+    # #global model parameters
+    # server_state_dict = get_peft_model_state_dict(model, adapter_name="default")
+    # server_params = {n: p.clone() for n, p in server_state_dict.items()}
+    # server_mask = {}
 
-    #Apply download sparsification
-    if flasc and dl_density < 1.0:
-        all_params_flat = torch.cat([p.view(-1) for p in server_params.values()])
-        server_mask_flat = get_topk_mask(all_params_flat, dl_density)
-        start = 0
-        for key, value in server_params.items():
-            numel = value.numel()
-            mask = server_mask_flat[start:start+numel].view_as(value)
-            server_mask[key] = mask
-            server_params[key] = value * mask
-            start += numel
-    else:
-        for val in server_params:
-            server_mask[val] = torch.ones_like(server_params[val])
+    # #Apply download sparsification
+    # if flasc and dl_density < 1.0:
+    #     all_params_flat = torch.cat([p.view(-1) for p in server_params.values()])
+    #     server_mask_flat = get_topk_mask(all_params_flat, dl_density)
+    #     start = 0
+    #     for key, value in server_params.items():
+    #         numel = value.numel()
+    #         mask = server_mask_flat[start:start+numel].view_as(value)
+    #         server_mask[key] = mask
+    #         server_params[key] = value * mask
+    #         start += numel
+    # else:
+    #     for val in server_params:
+    #         server_mask[val] = torch.ones_like(server_params[val])
     
-    aggregate = None
+    # aggregate = None
+    client_model = deepcopy(model)
 
     for k, client_id in enumerate(selected_clients_set):
         single_output_dir = os.path.join(output_dir, str(epoch), "local_output_{}".format(client_id),
                                          "pytorch_model.bin")
         client_weights = torch.load(single_output_dir)
-
-        neg_client_delta = {}
-        for n in server_params.keys():
-            if n in client_weights:
-                delta = server_params[n] - client_weights[n]
-                neg_client_delta[n] = delta
-            else:
-                print(f"Parameter {n} not found in client {client_id} weights.")
+        client_model.load_state_dict(client_weights)
 
         if flasc and ul_density < 1.0:
-            delta_flat = torch.cat([value.view(-1) for value in neg_client_delta.values()])
-            delta_mask_flat = get_topk_mask(delta_flat, ul_density)
-            start = 0
-            for key, value in neg_client_delta.items():
-                numel = value.numel()
-                mask = delta_mask_flat[start:start+numel].view_as(value)
-                neg_client_delta[key] = value * mask
-                start += numel
+            sparsify_model(client_model, ul_density)
+
+        sparse_client_weights = client_model.state_dict()
 
         #DP clipping and noise addition
-        delta_flat = torch.cat([value.view(-1) for value in neg_client_delta.values()])
+        delta_flat = torch.cat([value.view(-1) for value in sparse_client_weights.values()])
         l2_norm = torch.norm(delta_flat, p=2).item()
         if l2_clip_norm > 0.0:
             divisor = max(l2_norm / l2_clip_norm, 1.0)
-            for n in neg_client_delta:
-                neg_client_delta[n] = neg_client_delta[n] / divisor
+            for n in sparse_client_weights:
+                sparse_client_weights[n] /= divisor
 
-        for n in neg_client_delta:
-            neg_client_delta[n] = neg_client_delta[n] * weights_array[k]
-        
-        if aggregate is None:
-            aggregate = neg_client_delta
+        if k == 0:
+            weighted_sparse_client_weights = {key: sparse_client_weights[key] * (weights_array[k]) for key in
+                                       sparse_client_weights.keys()}
         else:
-            for n in aggregate:
-                aggregate[n] += neg_client_delta[n]
+            weighted_sparse_client_weights = {key: weighted_sparse_client_weights[key] + sparse_client_weights[key] * (weights_array[k])
+                                       for key in
+                                       sparse_client_weights.keys()}
 
     #DP and noise addition to the aggregate
     if l2_clip_norm > 0.0:
-        for n in aggregate:
-            aggregate[n] = aggregate[n] / l2_clip_norm
+        for n in weighted_sparse_client_weights:
+            weighted_sparse_client_weights[n] /= l2_clip_norm
     if noise_multiplier > 0.0:
-        for val in aggregate:
-            noise = noise_multiplier * torch.randn_like(aggregate[val])
-            aggregate[val] += noise
-
-    #Update server model
-    updated_state_dict = {}
-    for val in server_state_dict:
-        if val in aggregate:
-            updated_state_dict[val] = server_state_dict[val] - aggregate[val]
-        else:
-            updated_state_dict[val] = server_state_dict[val]
+        for val in weighted_sparse_client_weights:
+            noise = noise_multiplier * torch.randn_like(weighted_sparse_client_weights[val])
+            weighted_sparse_client_weights[val] += noise
     
-    set_peft_model_state_dict(model, updated_state_dict, adapter_name="default")
+    set_peft_model_state_dict(model, weighted_sparse_client_weights, adapter_name="default")
  
     return model
 
