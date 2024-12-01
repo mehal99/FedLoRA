@@ -13,6 +13,8 @@ from fed_utils import FedAvg, client_selection, global_evaluation, GeneralClient
 import datasets
 from utils.prompter import Prompter
 import json
+from other import get_topk_mask, sparsify_model
+from copy import deepcopy
 
 file_path = './HF_key.json'
 with open(file_path, 'r') as file:
@@ -51,7 +53,13 @@ def fl_finetune(
         train_on_inputs: bool = True,
         group_by_length: bool = False,
         resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
-        prompt_template_name: str = "alpaca",  # The prompt template to use, will default to alpaca.
+        prompt_template_name: str = "alpaca",  # The prompt template to use, will default to alpaca.,
+        ##FLASC params
+        flasc = False,
+        dl_density = 1.0,
+        ul_density = 1.0,
+        l2_clip_norm = 0.0,
+        noise_multiplier = 0.0
 ):
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
         print(
@@ -211,9 +219,12 @@ def fl_finetune(
         print("\nConducting the client selection")
         selected_clients_set = client_selection(num_clients, client_selection_frac, client_selection_strategy,
                                                 other_info=epoch)
-
+        #Option to sparsify global model
+        sparse_model = deepcopy(model)
+        if flasc and dl_density < 1.0:
+            sparsify_model(sparse_model, dl_density)
         for client_id in selected_clients_set:
-            client = GeneralClient(client_id, model, data_path, output_dir)
+            client = GeneralClient(client_id, sparse_model, data_path, output_dir)
 
             print("\nPreparing the local dataset and trainer for Client_{}".format(client_id))
             client.preprare_local_dataset(generate_and_tokenize_prompt, local_val_set_size)
@@ -242,11 +253,11 @@ def fl_finetune(
                        output_dir,
                        local_dataset_len_dict,
                        epoch, 
-                       use_flasc=False,
-                       dl_density=1.0,
-                       ul_density=1.0, 
-                       l2_clip_norm=0.0,
-                       noise_multiplier=0.0)
+                       use_flasc=flasc,
+                       dl_density=dl_density,
+                       ul_density=ul_density, 
+                       l2_clip_norm=l2_clip_norm,
+                       noise_multiplier=noise_multiplier)
         torch.save(model.state_dict(), os.path.join(output_dir, str(epoch), "adapter_model.bin"))
         config.save_pretrained(output_dir)
 
