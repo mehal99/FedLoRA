@@ -13,7 +13,7 @@ from fed_utils import FedAvg, client_selection, global_evaluation, GeneralClient
 import datasets
 from utils.prompter import Prompter
 import json
-from other import get_topk_mask, sparsify_model
+from fed_utils.other import get_topk_mask, sparsify_model
 from copy import deepcopy
 
 file_path = './HF_key.json'
