@@ -4,6 +4,7 @@ data/
 __pycache__/
 output/
 lora-shepherd-Qwen3b/
+lora-shepherd-7b/
 *.out
 *.sbatch
 cifar10/

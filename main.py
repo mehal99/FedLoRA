@@ -101,6 +101,30 @@ def fl_finetune(
         modules_to_save=["classifier"]
     )
     model = get_peft_model(model, config)
+
+    if full == False:
+        if stacking == False:
+            config = LoraConfig(
+            r=lora_r,
+            lora_alpha=lora_alpha,
+            target_modules=lora_target_modules,
+            lora_dropout=lora_dropout,
+            bias="none",
+            modules_to_save=["classifier"]
+        )
+        model = get_peft_model(model, config)
+        
+        else:
+            config_ori = LoraConfig(
+                base_model_name_or_path=global_model,
+                r = lora_r * num_clients,
+                lora_alpha = lora_alpha * num_clients,
+                target_modules = lora_target_modules,
+                lora_dropout = lora_dropout,
+                bias = "none",
+                modules_to_save=["classifier"]
+            )
+
     if not ddp and torch.cuda.device_count() > 1:
         model.is_parallelizable = True
         model.model_parallel = True
@@ -120,7 +144,53 @@ def fl_finetune(
         selected_clients_set = client_selection(num_clients, client_selection_frac, client_selection_strategy,
                                                 other_info=epoch)    
         for client_id in selected_clients_set:
-            client = GeneralClient(client_id, model, client_subsets[client_id], output_dir)
+
+
+            if full == False:
+                if stacking:
+                    if heter:
+                        config = LoraConfig(
+                        r=local_ranks[client_id],
+                        lora_alpha=2*local_ranks[client_id],
+                        target_modules=lora_target_modules,
+                        lora_dropout=lora_dropout,
+                        bias="none",
+                        task_type="CAUSAL_LM",
+                        base_model_name_or_path=global_model,
+                        )
+                        model_client = copy.deepcopy(model)
+                        model_client = get_peft_model(model_client, config)
+                    else:
+                        config = LoraConfig(
+                        r=lora_r,
+                        lora_alpha=lora_alpha,
+                        target_modules=lora_target_modules,
+                        lora_dropout=lora_dropout,
+                        bias="none",
+                        task_type="CAUSAL_LM",
+                        base_model_name_or_path=global_model,
+                        )
+                        model_client = copy.deepcopy(model)
+                        model_client = get_peft_model(model_client, config)
+                else:
+                    if heter:
+                        config = LoraConfig(
+                        r=local_ranks[client_id],
+                        lora_alpha=2*local_ranks[client_id],
+                        target_modules=lora_target_modules,
+                        lora_dropout=lora_dropout,
+                        bias="none",
+                        task_type="CAUSAL_LM",
+                        base_model_name_or_path=global_model,
+                        )
+                        model_client = copy.deepcopy(model)
+                        model_client = get_peft_model(model_client, config)
+                    else:
+                        model_client = copy.deepcopy(model)
+            else:
+                model_client = copy.deepcopy(model)
+
+            client = GeneralClient(client_id, model_client, client_subsets[client_id], output_dir)
             client.train(local_learning_rate, local_num_epochs, test_batch)
             print("\nTerminating the local training of Client_{}".format(client_id))
             model, local_dataset_len_dict = client.terminate_local_training(epoch, local_dataset_len_dict)
@@ -133,8 +203,37 @@ def fl_finetune(
                        local_dataset_len_dict,
                        epoch
                        )
-        torch.save(model.state_dict(), os.path.join(output_dir, str(epoch), "adapter_model.bin"))
-        config.save_pretrained(output_dir)
+
+
+        if full == False:
+            if stacking:
+                config_ori.save_pretrained(
+                    os.path.join(output_dir, str(epoch)),
+                    load_in_8bit=False,
+                    torch_dtype=torch.float16,
+                    device_map=device_map,
+                )
+                model = PeftModel.from_pretrained(model, os.path.join(output_dir, str(epoch)))
+            else:
+                torch.save(model.state_dict(), os.path.join(output_dir, str(epoch), "adapter_model.bin"))
+                config.save_pretrained(
+                    os.path.join(output_dir, str(epoch)),
+                    load_in_8bit=False,
+                    torch_dtype=torch.float16,
+                    device_map=device_map,
+                )
+        else:
+            config = AutoConfig.from_pretrained(global_model)
+            tokenizer.save_pretrained(os.path.join(output_dir, str(epoch)),
+                    load_in_8bit=False,
+                    torch_dtype=torch.float32,
+                    device_map=device_map,)
+            config.save_pretrained(os.path.join(output_dir, str(epoch)),
+                    load_in_8bit=False,
+                    torch_dtype=torch.float32,
+                    device_map=device_map,)
+
+            print('save model')
 
         # Please design the evaluation method based on your specific requirements in the fed_utils/evaluation.py file.
         # acc = global_evaluation(model, processor, valloader)
@@ -143,6 +242,15 @@ def fl_finetune(
         print('Loss of Epoch', str(epoch), 'is:', global_loss)
         acc_list.append(global_acc)
         loss_list.append(global_loss)
+
+
+        if stacking:
+            model = model.merge_and_unload()
+            model.save_pretrained(os.path.join(output_dir, str(epoch) + '/final'),
+                    load_in_8bit=False,
+                    torch_dtype=torch.float32,
+                    device_map=device_map,)
+    
 
     print(f"Accuracy of the global model across epochs: {acc_list}")
     print(f"Loss of the global model across epochs: {loss_list}")

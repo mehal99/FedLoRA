@@ -14,7 +14,7 @@ from tqdm import tqdm
 class GeneralClient:
     def __init__(self, client_id, model, client_subset, output_dir):
         self.client_id = client_id
-        self.model = deepcopy(model)
+        self.model = model
         self.local_data = client_subset
         self.output_dir = output_dir
         self.local_output_dir = os.path.join(self.output_dir, "trainer_saved", "local_output_{}".format(self.client_id))
