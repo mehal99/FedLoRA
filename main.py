@@ -47,7 +47,13 @@ def fl_finetune(
             "query", "value",
         ],
         ## heterogeneity params
-        alpha: float = 0.1
+        alpha: float = 0.1,
+        ## flora
+        heter: bool = False,
+        local_ranks: List[int] = [64, 32, 16, 16, 8, 8, 4, 4, 4, 4],
+        zero_padding: bool = False,
+        Adalora: bool = False,
+        full: bool = False
 ):
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
         print(
@@ -201,7 +207,13 @@ def fl_finetune(
                        selected_clients_set,
                        output_dir,
                        local_dataset_len_dict,
-                       epoch
+                       epoch,
+                       stacking,
+                       lora_r,
+                       heter,
+                       local_ranks,
+                       zero_padding,
+                       full
                        )
 
 
