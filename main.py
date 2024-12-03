@@ -9,7 +9,7 @@ from peft import (
     get_peft_model,
     prepare_model_for_kbit_training,
 )
-from fed_utils import FedAvg, client_selection, global_evaluation, GeneralClient
+from fed_utils import FedAvg, FedSA, client_selection, global_evaluation, GeneralClient
 import datasets
 from utils.prompter import Prompter
 import json
@@ -52,6 +52,7 @@ def fl_finetune(
         group_by_length: bool = False,
         resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
         prompt_template_name: str = "alpaca",  # The prompt template to use, will default to alpaca.
+        aggregation_strategy: str = 'FedAvg',
 ):
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
         print(
@@ -237,12 +238,20 @@ def fl_finetune(
             del client
 
         print("Collecting the weights of clients and performing aggregation")
-        model = FedAvg(model,
-                       selected_clients_set,
-                       output_dir,
-                       local_dataset_len_dict,
-                       epoch,
-                       )
+        if aggregation_strategy == 'FedAvg':
+            model = FedAvg(model,
+                           selected_clients_set,
+                           output_dir,
+                           local_dataset_len_dict,
+                           epoch,
+                           )
+        elif aggregation_strategy == 'FedSA':
+            model = FedSA(model,
+                          selected_clients_set,
+                          output_dir,
+                          local_dataset_len_dict,
+                          epoch,
+                          )
         torch.save(model.state_dict(), os.path.join(output_dir, str(epoch), "adapter_model.bin"))
         config.save_pretrained(output_dir)
 
