@@ -77,7 +77,8 @@ def fl_finetune(
             f"lora_r: {lora_r}\n"
             f"lora_alpha: {lora_alpha}\n"
             f"lora_dropout: {lora_dropout}\n"
-            f"lora_target_modules: {lora_target_modules}\n"
+            f"lora_target_modules: {lora_target_modules}\n",
+            f"alpha: {alpha}\n"
         )
     assert (
         global_model
