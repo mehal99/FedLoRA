@@ -20,6 +20,7 @@ def FedAvg(model, selected_clients_set, output_dir, local_dataset_len_dict, epoc
         single_output_dir = os.path.join(output_dir, str(epoch), "local_output_{}".format(client_id),
                                          "pytorch_model.bin")
         client_weights = torch.load(single_output_dir)
+        print(client_weights.keys())
         client_model.load_state_dict(client_weights)
 
         if flasc and ul_density < 1.0:
