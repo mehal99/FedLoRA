@@ -44,7 +44,7 @@ def fl_finetune(
         lora_alpha: int = 16,
         lora_dropout: float = 0.05,
         lora_target_modules: List[str] = [
-            "query", "value"
+            "query", "value",
         ],
         ## heterogeneity params
         alpha: float = 0.1
@@ -97,7 +97,8 @@ def fl_finetune(
         lora_alpha=lora_alpha,
         target_modules=lora_target_modules,
         lora_dropout=lora_dropout,
-        bias="none"
+        bias="none",
+        modules_to_save=["classifier"]
     )
     model = get_peft_model(model, config)
     if not ddp and torch.cuda.device_count() > 1:
@@ -107,7 +108,7 @@ def fl_finetune(
     print("The process of federated classification has started..")
 
     local_dataset_len_dict = dict()
-    output_dir = os.path.join(output_dir, str(num_clients))
+    output_dir = os.path.join(output_dir, str(alpha), str(num_clients), str(local_learning_rate))
 
     acc_list = []
     loss_list = []
@@ -137,7 +138,7 @@ def fl_finetune(
 
         # Please design the evaluation method based on your specific requirements in the fed_utils/evaluation.py file.
         # acc = global_evaluation(model, processor, valloader)
-        global_acc, global_loss = eval_loop(model, valloader)
+        global_acc, global_loss = eval_loop(model, testloader)
         print('Acc of Epoch', str(epoch), 'is:', global_acc)
         print('Loss of Epoch', str(epoch), 'is:', global_loss)
         acc_list.append(global_acc)
