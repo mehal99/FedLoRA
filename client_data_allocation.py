@@ -1,104 +1,75 @@
-import sys
-import pandas as pd
-import numpy as np
-import random
+import torch
+import torchvision
+import torchvision.transforms as transforms
+from torch.utils.data import DataLoader
+from transformers import AutoTokenizer
+from sklearn.datasets import fetch_20newsgroups
 import os
 import json
-import pdb
-
-num_clients = int(sys.argv[1])
-diff_quantity = int(sys.argv[2])
+import numpy as np
+from scipy import stats
+from PIL import Image
+import random
+from fed_utils import test_batch_cls
 
 seed = 42
 np.random.seed(seed)
 random.seed(seed)
 
-# Divide the entire dataset into a training set and a test set.
-df = pd.read_json("new-databricks-dolly-15k.json", orient='records')
+DATA = "."
 
-# Preprocessing Alpaca dataset into dolly format
-alpaca_df = pd.read_json("alpaca_data.json", orient='records')
-alpaca_df.rename(columns={'output': 'response',"input":"context"}, inplace=True)
-alpaca_df["category"] = "alpaca"
-alpaca_df = alpaca_df.sample(n=15000, random_state=seed)
+def build_dataset(batch_size, n_clients, alpha=-1, seed=0):
+    valset = None
+    clients, valset, testset = build_cifar10(n_clients, alpha, seed)
+    TEST_BATCH = 32
+    clientloaders = [DataLoader(client, batch_size=batch_size, shuffle=True, num_workers=0) for client in clients]
+    if valset is not None:
+        valloader = DataLoader(valset, batch_size=TEST_BATCH, shuffle=False, num_workers=1)
+    else:
+        valloader = None
+    testloader = DataLoader(testset, batch_size=TEST_BATCH, shuffle=False, num_workers=1)
+    def test_batch(model, x, y):
+        return test_batch_cls(model, x, y)
+    return clientloaders, valloader, testloader, test_batch
 
-# dividing into test and train for dolly
-sorted_df = df.sort_values(by=['category'])
-grouped = sorted_df.groupby('category')
-sampled_df = grouped.apply(lambda x: x.sample(n=10))
-sampled_df = sampled_df.reset_index(level=0, drop=True)
-remaining_df = sorted_df.drop(index=sampled_df.index)
+def partition_dirichlet(Y, n_clients, alpha, seed):
+    clients = []
+    ex_per_class = np.unique(Y, return_counts=True)[1]
+    n_classes = len(ex_per_class)
+    print(f"Found {n_classes} classes")
+    rv_tr = stats.dirichlet.rvs(np.repeat(alpha, n_classes), size=n_clients, random_state=seed) 
+    rv_tr = rv_tr / rv_tr.sum(axis=0)
+    rv_tr = (rv_tr*ex_per_class).round().astype(int)
+    class_to_idx = {i: np.where(Y == i)[0] for i in range(n_classes)}
+    curr_start = np.zeros(n_classes).astype(int)
+    for client_classes in rv_tr:
+        curr_end = curr_start + client_classes
+        client_idx = np.concatenate([class_to_idx[c][curr_start[c]:curr_end[c]] for c in range(n_classes)])
+        curr_start = curr_end
+        clients.append(client_idx)
+        # will be empty subset if all examples have been exhausted
+    return clients
 
-# dividing into test and train for alpaca
-alpaca_sorted_df = alpaca_df.sort_values(by=['category'])
-alpaca_grouped = alpaca_sorted_df.groupby('category')
-alpaca_sampled_df = alpaca_grouped.apply(lambda x: x.sample(n=80))
-alpaca_sampled_df = alpaca_sampled_df.reset_index(level=0, drop=True)
-alpaca_remaining_df = alpaca_sorted_df.drop(index=alpaca_sampled_df.index)
-
-# #combining alpaca and dolly
-# sampled_df = pd.concat([sampled_df, alpaca_sampled_df], ignore_index=True, sort=False)
-# remaining_df = pd.concat([remaining_df, alpaca_remaining_df], ignore_index=True, sort=False)
-
-sampled_df = sampled_df.reset_index().drop('index', axis=1)
-remaining_df = remaining_df.reset_index().drop('index', axis=1)
-data_path = os.path.join("data", str(num_clients))
-
-os.makedirs(data_path,exist_ok=True)
-
-remaining_df_dic = remaining_df.to_dict(orient='records')
-with open(os.path.join(data_path, "global_training.json"), 'w') as outfile:
-    json.dump(remaining_df_dic, outfile)
-
-sampled_df_dic = sampled_df.to_dict(orient='records')
-with open(os.path.join(data_path, "global_test.json"), 'w') as outfile:
-    json.dump(sampled_df_dic, outfile)
-
-# Partition the global training data into smaller subsets for each client's local training dataset
-
-if diff_quantity:
-    min_size = 0
-    min_require_size = 40
-    alpha = 0.5
-
-    N = len(remaining_df)
-    net_dataidx_map = {}
-    category_uniques = remaining_df['category'].unique().tolist()
-    while min_size < min_require_size:
-
-        idx_partition = [[] for _ in range(num_clients)]
-        for k in range(len(category_uniques)):
-            category_rows_k = remaining_df.loc[remaining_df['category'] == category_uniques[k]]
-            category_rows_k_index = category_rows_k.index.values
-            np.random.shuffle(category_rows_k_index)
-            proportions = np.random.dirichlet(np.repeat(alpha, num_clients))
-            proportions = np.array([p * (len(idx_j) < N / num_clients) for p, idx_j in zip(proportions, idx_partition)])
-            proportions = proportions / proportions.sum()
-            proportions = (np.cumsum(proportions) * len(category_rows_k_index)).astype(int)[:-1]
-            idx_partition = [idx_j + idx.tolist() for idx_j, idx in
-                             zip(idx_partition, np.split(category_rows_k_index, proportions))]
-            min_size = min([len(idx_j) for idx_j in idx_partition])
-
-        print(min_size)
-
-
-else:
-    num_shards_per_clients = 2
-    remaining_df_index = remaining_df.index.values
-    shards = np.array_split(remaining_df_index, int(num_shards_per_clients * num_clients))
-    random.shuffle(shards)
-
-    shards = [shards[i:i + num_shards_per_clients] for i in range(0, len(shards), num_shards_per_clients)]
-    idx_partition = [np.concatenate(shards[n]).tolist() for n in range(num_clients)]
-
-
-for client_id, idx in enumerate(idx_partition):
-    print(
-        "\n Generating the local training dataset of Client_{}".format(client_id)
-    )
-    sub_remaining_df = remaining_df.loc[idx]
-    sub_remaining_df = sub_remaining_df.reset_index().drop('index', axis=1)
-    sub_remaining_df_dic = sub_remaining_df.to_dict(orient='records')
-
-    with open(os.path.join(data_path, "local_training_{}.json".format(client_id)), 'w') as outfile:
-        json.dump(sub_remaining_df_dic, outfile)
+def build_cifar10(n_clients, alpha, seed):
+    normalize = transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+    transform = transforms.Compose([
+        transforms.RandomResizedCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        normalize,
+    ])
+    test_transform = transforms.Compose([
+        transforms.Resize(224),
+        transforms.ToTensor(),
+        normalize,
+    ])
+    trainset = torchvision.datasets.CIFAR10(root=f"{DATA}/cifar10", train=True, download=True, transform=transform)
+    N = len(trainset)
+    trainidx = np.arange(0, int(N*0.8))
+    Y_tr = np.array([trainset.targets[i] for i in trainidx])
+    clientidx = partition_dirichlet(Y_tr, n_clients, alpha, seed)
+    clients = [torch.utils.data.Subset(trainset, trainidx[cidx]) for cidx in clientidx]
+    validx = np.arange(int(N*0.8), N)
+    valset = torch.utils.data.Subset(trainset, validx)
+    testset = torchvision.datasets.CIFAR10(root=f"{DATA}/cifar10", train=False, download=True, transform=test_transform)
+    return clients, valset, testset
