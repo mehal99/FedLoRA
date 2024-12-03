@@ -11,3 +11,11 @@ git+https://github.com/huggingface/transformers.git
 sentencepiece
 gradio
 sentencepiece
+torchvision
+tqdm 
+scikit_learn 
+numpy 
+scipy 
+torch 
+torchaudio
+
