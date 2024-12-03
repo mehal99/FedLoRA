@@ -8,6 +8,7 @@ from peft import (
     LoraConfig,
     get_peft_model,
     prepare_model_for_kbit_training,
+    PeftModel
 )
 from fed_utils import FedAvg, client_selection, global_evaluation, GeneralClient
 import datasets
@@ -18,7 +19,7 @@ from PIL import Image
 import requests
 from client_data_allocation import build_dataset
 from fed_utils import eval_loop
-
+import copy
 datasets.utils.logging.set_verbosity_error()
 
 def fl_finetune(
@@ -49,10 +50,10 @@ def fl_finetune(
         ## heterogeneity params
         alpha: float = 0.1,
         ## flora
+        stacking = True,
         heter: bool = False,
         local_ranks: List[int] = [64, 32, 16, 16, 8, 8, 4, 4, 4, 4],
         zero_padding: bool = False,
-        Adalora: bool = False,
         full: bool = False
 ):
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
@@ -117,9 +118,8 @@ def fl_finetune(
             lora_dropout=lora_dropout,
             bias="none",
             modules_to_save=["classifier"]
-        )
-        model = get_peft_model(model, config)
-        
+            )
+            model = get_peft_model(model, config) 
         else:
             config_ori = LoraConfig(
                 base_model_name_or_path=global_model,
@@ -138,7 +138,7 @@ def fl_finetune(
     print("The process of federated classification has started..")
 
     local_dataset_len_dict = dict()
-    output_dir = os.path.join(output_dir, str(alpha), str(num_clients), str(local_learning_rate))
+    output_dir = os.path.join(output_dir, "flora", str(alpha), str(num_clients), str(local_learning_rate))
 
     acc_list = []
     loss_list = []
@@ -156,38 +156,38 @@ def fl_finetune(
                 if stacking:
                     if heter:
                         config = LoraConfig(
-                        r=local_ranks[client_id],
-                        lora_alpha=2*local_ranks[client_id],
-                        target_modules=lora_target_modules,
-                        lora_dropout=lora_dropout,
-                        bias="none",
-                        task_type="CAUSAL_LM",
-                        base_model_name_or_path=global_model,
+                            r=local_ranks[client_id],
+                            lora_alpha=2*local_ranks[client_id],
+                            target_modules=lora_target_modules,
+                            lora_dropout=lora_dropout,
+                            bias="none",
+                            base_model_name_or_path=global_model,
+                            modules_to_save=["classifier"]
                         )
                         model_client = copy.deepcopy(model)
                         model_client = get_peft_model(model_client, config)
                     else:
                         config = LoraConfig(
-                        r=lora_r,
-                        lora_alpha=lora_alpha,
-                        target_modules=lora_target_modules,
-                        lora_dropout=lora_dropout,
-                        bias="none",
-                        task_type="CAUSAL_LM",
-                        base_model_name_or_path=global_model,
+                            r=lora_r,
+                            lora_alpha=lora_alpha,
+                            target_modules=lora_target_modules,
+                            lora_dropout=lora_dropout,
+                            bias="none",
+                            base_model_name_or_path=global_model,
+                            modules_to_save=["classifier"]
                         )
                         model_client = copy.deepcopy(model)
                         model_client = get_peft_model(model_client, config)
                 else:
                     if heter:
                         config = LoraConfig(
-                        r=local_ranks[client_id],
-                        lora_alpha=2*local_ranks[client_id],
-                        target_modules=lora_target_modules,
-                        lora_dropout=lora_dropout,
-                        bias="none",
-                        task_type="CAUSAL_LM",
-                        base_model_name_or_path=global_model,
+                            r=local_ranks[client_id],
+                            lora_alpha=2*local_ranks[client_id],
+                            target_modules=lora_target_modules,
+                            lora_dropout=lora_dropout,
+                            bias="none",
+                            base_model_name_or_path=global_model,
+                            modules_to_save=["classifier"]
                         )
                         model_client = copy.deepcopy(model)
                         model_client = get_peft_model(model_client, config)
@@ -234,18 +234,6 @@ def fl_finetune(
                     torch_dtype=torch.float16,
                     device_map=device_map,
                 )
-        else:
-            config = AutoConfig.from_pretrained(global_model)
-            tokenizer.save_pretrained(os.path.join(output_dir, str(epoch)),
-                    load_in_8bit=False,
-                    torch_dtype=torch.float32,
-                    device_map=device_map,)
-            config.save_pretrained(os.path.join(output_dir, str(epoch)),
-                    load_in_8bit=False,
-                    torch_dtype=torch.float32,
-                    device_map=device_map,)
-
-            print('save model')
 
         # Please design the evaluation method based on your specific requirements in the fed_utils/evaluation.py file.
         # acc = global_evaluation(model, processor, valloader)
