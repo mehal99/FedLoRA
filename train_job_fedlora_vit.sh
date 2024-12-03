@@ -11,7 +11,7 @@
 
 #hyperparameters
 client_fractions=(1)
-comm_rounds=(50)
+comm_rounds=(10)   
 num_clients=(5)
 local_learning_rates=(5e-4 1e-4 1e-3)
 alphas=(100)
