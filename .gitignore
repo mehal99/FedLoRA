@@ -6,3 +6,7 @@ output/
 lora-shepherd-Qwen3b/
 *.out
 *.sbatch
+cifar10/
+lora-shepherd/
+*.err
+*.out
