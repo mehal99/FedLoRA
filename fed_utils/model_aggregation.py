@@ -6,7 +6,7 @@ import torch
 import os
 from copy import deepcopy
 from torch.nn.functional import normalize
-from other import get_topk_mask, sparsify_model
+from fed_utils.other import get_topk_mask, sparsify_model
 
 def FedAvg(model, selected_clients_set, output_dir, local_dataset_len_dict, epoch, flasc=False, dl_density=1.0, ul_density=1.0, l2_clip_norm=0.0, noise_multiplier=0.0):
     weights_array = normalize(

@@ -36,9 +36,9 @@ alpaca_sampled_df = alpaca_grouped.apply(lambda x: x.sample(n=80))
 alpaca_sampled_df = alpaca_sampled_df.reset_index(level=0, drop=True)
 alpaca_remaining_df = alpaca_sorted_df.drop(index=alpaca_sampled_df.index)
 
-#combining alpaca and dolly
-sampled_df = pd.concat([sampled_df, alpaca_sampled_df], ignore_index=True, sort=False)
-remaining_df = pd.concat([remaining_df, alpaca_remaining_df], ignore_index=True, sort=False)
+# #combining alpaca and dolly
+# sampled_df = pd.concat([sampled_df, alpaca_sampled_df], ignore_index=True, sort=False)
+# remaining_df = pd.concat([remaining_df, alpaca_remaining_df], ignore_index=True, sort=False)
 
 sampled_df = sampled_df.reset_index().drop('index', axis=1)
 remaining_df = remaining_df.reset_index().drop('index', axis=1)
