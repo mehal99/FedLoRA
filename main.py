@@ -253,7 +253,7 @@ def fl_finetune(
                        output_dir,
                        local_dataset_len_dict,
                        epoch, 
-                       use_flasc=flasc,
+                       flasc=flasc,
                        dl_density=dl_density,
                        ul_density=ul_density, 
                        l2_clip_norm=l2_clip_norm,
