@@ -42,7 +42,7 @@ def fl_finetune(
         # Local training hyperparams
         local_batch_size: int = 64,  # 64,
         local_micro_batch_size: int = 8,
-        local_num_epochs: int = 10,
+        local_num_epochs: int = 2,
         local_learning_rate: float = 3e-4,
         local_val_set_size: int = 0,
         local_save_steps: int = 3,
@@ -158,8 +158,9 @@ def fl_finetune(
 
     accuracy_plot_path = os.path.join(output_dir, 'accuracy_plot.png')
     loss_plot_path = os.path.join(output_dir, 'loss_plot.png')
-    plot(x=num_communication_rounds, y=acc_list*100, x_label="Communication Rounds", y_label="Accuracy (%)", title="Global Model Accuracy vs. Communication Rounds", path=accuracy_plot_path)
-    plot(x=num_communication_rounds, y=loss_list*100, x_label="Communication Rounds", y_label="Loss", title="Global Model Loss vs. Communication Rounds", path=loss_plot_path)
+    acc_percentage = [acc * 100 for acc in acc_list]
+    plot(x=range(num_communication_rounds), y=acc_percentage, x_label="Communication Rounds", y_label="Accuracy (%)", title="Global Model Accuracy vs. Communication Rounds", path=accuracy_plot_path)
+    plot(x=range(num_communication_rounds), y=loss_list, x_label="Communication Rounds", y_label="Loss", title="Global Model Loss vs. Communication Rounds", path=loss_plot_path)
 
     #os.system("lm_eval --model_args pretrained=huggyllama/llama-7b,parallelize=True,load_in_4bit=False,peft={current_dir} --tasks arc_challenge,mmlu --device cuda --output_path {current_dir}".format(current_dir = os.path.join(output_dir, str(epoch))))
     filename = output_dir + 'log.txt'
