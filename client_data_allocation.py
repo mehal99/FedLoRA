@@ -65,11 +65,29 @@ def build_cifar10(n_clients, alpha, seed):
     ])
     trainset = torchvision.datasets.CIFAR10(root=f"{DATA}/cifar10", train=True, download=True, transform=transform)
     N = len(trainset)
-    trainidx = np.arange(0, int(N*0.8))
-    Y_tr = np.array([trainset.targets[i] for i in trainidx])
+
+    #Create a subset with 10000 samples
+    total_samples = 10000
+    num_classes = 10
+    samples_per_class = total_samples // num_classes
+
+    class_indices = {i: [] for i in range(num_classes)}
+    for idx, (_, label) in enumerate(trainset):
+        class_indices[label].append(idx)
+    subset_indices = []
+    for _, indices in class_indices.items():
+        subset_indices.extend(indices[:samples_per_class])
+    random.shuffle(subset_indices)
+
+    trainset = torch.utils.data.Subset(trainset, subset_indices)
+    subset_targets = np.array([trainset.dataset.targets[i] for i in trainset.indices])  
+
+    trainidx = np.arange(0, int(len(subset_indices) * 0.8))
+    Y_tr = subset_targets[trainidx]  # Access targets for the training set
     clientidx = partition_dirichlet(Y_tr, n_clients, alpha, seed)
     clients = [torch.utils.data.Subset(trainset, trainidx[cidx]) for cidx in clientidx]
-    validx = np.arange(int(N*0.8), N)
+
+    validx = np.arange(int(len(subset_indices) * 0.8), len(subset_indices))
     valset = torch.utils.data.Subset(trainset, validx)
     testset = torchvision.datasets.CIFAR10(root=f"{DATA}/cifar10", train=False, download=True, transform=test_transform)
     return clients, valset, testset
