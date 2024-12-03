@@ -7,14 +7,14 @@
 #SBATCH --cpus-per-task 2
 #SBATCH --mem=16G
 #SBATCH --gres=gpu:H100:1
-#SBATCH --array=0-8
+#SBATCH --array=0-5
 
 #hyperparameters
-client_fractions=(1)
+client_fractions=(0.1 0.5)
 comm_rounds=(10)
-num_clients=(1 3 5)
+num_clients=(10)
 local_learning_rates=(5e-4)
-alphas=(0.1 10 100)
+alphas=(0.01 10 100)
 
 total_combinations=$((${#client_fractions[@]} * ${#comm_rounds[@]} * ${#num_clients[@]} * ${#local_learning_rates[@]} * ${#alphas[@]}))
 
