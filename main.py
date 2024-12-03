@@ -3,7 +3,6 @@ from typing import List
 from tqdm import tqdm
 import fire
 import torch
-from transformers import LlamaTokenizer, LlamaForCausalLM, AutoModelForCausalLM, AutoTokenizer, GPT2LMHeadModel
 from peft import (
     LoraConfig,
     get_peft_model,
@@ -11,15 +10,24 @@ from peft import (
 )
 from fed_utils import FedAvg, client_selection, global_evaluation, GeneralClient
 import datasets
-from utils.prompter import Prompter
-import json
-from transformers import ViTImageProcessor, ViTForImageClassification
+from transformers import ViTForImageClassification
 from PIL import Image
-import requests
 from client_data_allocation import build_dataset
 from fed_utils import eval_loop
+import matplotlib.pyplot as plt
 
 datasets.utils.logging.set_verbosity_error()
+
+def plot(x, y, x_label, y_label, title, path):
+    plt.figure()
+    plt.plot(x, y, marker='o', label='Accuracy')
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    plt.title(title)
+    plt.legend()
+    plt.savefig(path)
+    plt.close()
+    print(f"Plot saved at: {path}")
 
 def fl_finetune(
         # model/data params
@@ -146,6 +154,11 @@ def fl_finetune(
 
     print(f"Accuracy of the global model across epochs: {acc_list}")
     print(f"Loss of the global model across epochs: {loss_list}")
+
+    accuracy_plot_path = os.path.join(output_dir, 'accuracy_plot.png')
+    loss_plot_path = os.path.join(output_dir, 'loss_plot.png')
+    plot(x=num_communication_rounds, y=acc_list*100, x_label="Communication Rounds", y_label="Accuracy (%)", title="Global Model Accuracy vs. Communication Rounds", path=accuracy_plot_path)
+    plot(x=num_communication_rounds, y=loss_list*100, x_label="Communication Rounds", y_label="Loss", title="Global Model Loss vs. Communication Rounds", path=loss_plot_path)
 
     #os.system("lm_eval --model_args pretrained=huggyllama/llama-7b,parallelize=True,load_in_4bit=False,peft={current_dir} --tasks arc_challenge,mmlu --device cuda --output_path {current_dir}".format(current_dir = os.path.join(output_dir, str(epoch))))
     filename = output_dir + 'log.txt'
