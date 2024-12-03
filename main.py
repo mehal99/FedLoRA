@@ -13,23 +13,22 @@ from fed_utils import FedAvg, client_selection, global_evaluation, GeneralClient
 import datasets
 from utils.prompter import Prompter
 import json
-
-file_path = './HF_key.json'
-with open(file_path, 'r') as file:
-    keys = json.load(file)
+from transformers import ViTImageProcessor, ViTForImageClassification
+from PIL import Image
+import requests
+from client_data_allocation import build_dataset
+from fed_utils import eval_loop
 
 datasets.utils.logging.set_verbosity_error()
 
-
 def fl_finetune(
         # model/data params
-        global_model: str = '',
+        global_model: str = 'vit',
         data_path: str = './data',
-        dev_data_path: str = './mmlu_test_1444.jsonl',
         output_dir: str = './lora-shepherd/',
         # FL hyperparamas
         client_selection_strategy: str = 'random',
-        client_selection_frac: float = 0.1,
+        client_selection_frac: float = 0.5,
         num_communication_rounds: int = 50,
         num_clients: int = 10,
         # Local training hyperparams
@@ -45,13 +44,10 @@ def fl_finetune(
         lora_alpha: int = 16,
         lora_dropout: float = 0.05,
         lora_target_modules: List[str] = [
-            "q_proj",
+            "query", "value"
         ],
-        # llm hyperparams
-        train_on_inputs: bool = True,
-        group_by_length: bool = False,
-        resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
-        prompt_template_name: str = "alpaca",  # The prompt template to use, will default to alpaca.
+        ## heterogeneity params
+        alpha: float = 0.1
 ):
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
         print(
@@ -74,21 +70,16 @@ def fl_finetune(
             f"lora_alpha: {lora_alpha}\n"
             f"lora_dropout: {lora_dropout}\n"
             f"lora_target_modules: {lora_target_modules}\n"
-            f"train_on_inputs: {train_on_inputs}\n"
-            f"group_by_length: {group_by_length}\n"
-            f"resume_from_checkpoint: {resume_from_checkpoint or False}\n"
-            f"prompt template: {prompt_template_name}\n"
         )
     assert (
         global_model
     ), "Please specify a --global_model, e.g. --global_modell='decapoda-research/llama-7b-hf'"
 
-    data_path = os.path.join(data_path, str(num_clients))
-    assert (os.path.exists(data_path), "Please generate the data files for each client")
+    # data_path = os.path.join(data_path, str(num_clients))
+    # assert (os.path.exists(data_path), "Please generate the data files for each client")
 
     # set up the global model & toknizer
     gradient_accumulation_steps = local_batch_size // local_micro_batch_size
-    prompter = Prompter(prompt_template_name)
     device_map = "auto"
     world_size = int(os.environ.get("WORLD_SIZE", 1))
     ddp = world_size != 1
@@ -96,144 +87,42 @@ def fl_finetune(
         device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
         gradient_accumulation_steps = gradient_accumulation_steps // world_size
 
-    # model = LlamaForCausalLM.from_pretrained(
-    #     global_model,
-    #     load_in_8bit=True,
-    #     torch_dtype=torch.float16,
-    #     device_map=device_map,
-    # )
-
-    # tokenizer = LlamaTokenizer.from_pretrained(global_model)
-
-    if global_model == 'gpt2':
-        model = GPT2LMHeadModel.from_pretrained(
-            global_model,
-            load_in_8bit=False,
-            torch_dtype=torch.float32,
-            device_map=device_map,
-        )
-    elif global_model == 'google/gemma-2b' or global_model == 'google/gemma-7b':
-        model = AutoModelForCausalLM.from_pretrained(
-            global_model,
-            load_in_8bit=False,
-            torch_dtype=torch.float32,
-            device_map=device_map,
-            token=keys["hf_token"],
-        )
-    else:
-        model = AutoModelForCausalLM.from_pretrained(
-            global_model,
-            load_in_8bit=False,
-            torch_dtype=torch.float32,
-            device_map=device_map,
-            token=keys["hf_token"],
-        )
-
-    if global_model == 'gpt2':
-        tokenizer = GPT2Tokenizer.from_pretrained(global_model)
-    elif global_model == 'google/gemma-2b' or global_model == 'google/gemma-7b':
-        tokenizer = AutoTokenizer.from_pretrained(global_model, token=keys["hf_token"])
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(global_model, token=keys["hf_token"])
-
-    tokenizer.pad_token_id = (
-        0
-    )
-    tokenizer.padding_side = "left"
-
-    
-
-    def tokenize(prompt, add_eos_token=True):
-        result = tokenizer(
-            prompt,
-            truncation=True,
-            max_length=cutoff_len,
-            padding=False,
-            return_tensors=None,
-        )
-        if (
-                result["input_ids"][-1] != tokenizer.eos_token_id
-                and len(result["input_ids"]) < cutoff_len
-                and add_eos_token
-        ):
-            result["input_ids"].append(tokenizer.eos_token_id)
-            result["attention_mask"].append(1)
-
-        result["labels"] = result["input_ids"].copy()
-
-        return result
-
-    def generate_and_tokenize_prompt(data_point):
-        full_prompt = prompter.generate_prompt(
-            data_point["instruction"],
-            data_point["context"],
-            data_point["response"],
-        )
-        tokenized_full_prompt = tokenize(full_prompt)
-        if not train_on_inputs:
-            user_prompt = prompter.generate_prompt(
-                data_point["instruction"], data_point["context"]
-            )
-            tokenized_user_prompt = tokenize(user_prompt, add_eos_token=False)
-            user_prompt_len = len(tokenized_user_prompt["input_ids"])
-
-            tokenized_full_prompt["labels"] = [
-                                                  -100
-                                              ] * user_prompt_len + tokenized_full_prompt["labels"][
-                                                                    user_prompt_len:
-                                                                    ]  # could be sped up, probably
-        return tokenized_full_prompt
-
-    model = prepare_model_for_kbit_training(model)
+    # processor = ViTImageProcessor.from_pretrained('google/vit-base-patch16-224')
+    if global_model == 'vit':
+        global_model = ViTForImageClassification.from_pretrained('google/vit-base-patch16-224-in21k', num_labels=10).cuda()
+   
+    model = prepare_model_for_kbit_training(global_model)
     config = LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
         target_modules=lora_target_modules,
         lora_dropout=lora_dropout,
-        bias="none",
-        task_type="CAUSAL_LM",
+        bias="none"
     )
     model = get_peft_model(model, config)
     if not ddp and torch.cuda.device_count() > 1:
         model.is_parallelizable = True
         model.model_parallel = True
 
-    print("The process of federated instruction-tuning has started..")
-    previously_selected_clients_set = set()
-    last_client_id = None
+    print("The process of federated classification has started..")
+
     local_dataset_len_dict = dict()
     output_dir = os.path.join(output_dir, str(num_clients))
 
     acc_list = []
-
+    loss_list = []
+    # def build_dataset(batch_size, n_clients, alpha=-1, seed=0):
+    client_subsets, valloader, testloader, test_batch = build_dataset(local_batch_size, num_clients, alpha)
+    
     for epoch in tqdm(range(num_communication_rounds)):
-
         print("\nConducting the client selection")
         selected_clients_set = client_selection(num_clients, client_selection_frac, client_selection_strategy,
-                                                other_info=epoch)
-
+                                                other_info=epoch)    
         for client_id in selected_clients_set:
-            client = GeneralClient(client_id, model, data_path, output_dir)
-
-            print("\nPreparing the local dataset and trainer for Client_{}".format(client_id))
-            client.preprare_local_dataset(generate_and_tokenize_prompt, local_val_set_size)
-            client.build_local_trainer(tokenizer,
-                                       local_micro_batch_size,
-                                       gradient_accumulation_steps,
-                                       local_num_epochs,
-                                       local_learning_rate,
-                                       group_by_length,
-                                       ddp)
-
-            print("Initiating the local training of Client_{}".format(client_id))
-            client.initiate_local_training()
-
-            print("Local training starts ... ")
-            client.train()
-
+            client = GeneralClient(client_id, model, client_subsets[client_id], output_dir)
+            client.train(local_learning_rate, local_num_epochs, test_batch)
             print("\nTerminating the local training of Client_{}".format(client_id))
-            model, local_dataset_len_dict, previously_selected_clients_set, last_client_id = client.terminate_local_training(
-                epoch, local_dataset_len_dict, previously_selected_clients_set)
+            model, local_dataset_len_dict = client.terminate_local_training(epoch, local_dataset_len_dict)
             del client
 
         print("Collecting the weights of clients and performing aggregation")
@@ -241,23 +130,33 @@ def fl_finetune(
                        selected_clients_set,
                        output_dir,
                        local_dataset_len_dict,
-                       epoch,
+                       epoch
                        )
         torch.save(model.state_dict(), os.path.join(output_dir, str(epoch), "adapter_model.bin"))
         config.save_pretrained(output_dir)
 
         # Please design the evaluation method based on your specific requirements in the fed_utils/evaluation.py file.
-        acc = global_evaluation(model, tokenizer, prompter, dev_data_path)
-        print('Acc of Epoch', str(epoch), 'is:', acc)
-        acc_list.append(acc)
+        # acc = global_evaluation(model, processor, valloader)
+        global_acc, global_loss = eval_loop(model, valloader)
+        print('Acc of Epoch', str(epoch), 'is:', global_acc)
+        print('Loss of Epoch', str(epoch), 'is:', global_loss)
+        acc_list.append(global_acc)
+        loss_list.append(global_loss)
 
+    print(f"Accuracy of the global model across epochs: {acc_list}")
+    print(f"Loss of the global model across epochs: {loss_list}")
 
-    print(acc_list)          
     #os.system("lm_eval --model_args pretrained=huggyllama/llama-7b,parallelize=True,load_in_4bit=False,peft={current_dir} --tasks arc_challenge,mmlu --device cuda --output_path {current_dir}".format(current_dir = os.path.join(output_dir, str(epoch))))
     filename = output_dir + 'log.txt'
     file = open(filename,'a')
+    s = "Accuracy"
     for i in range(len(acc_list)):
-        s = str(acc_list[i]).replace('[','').replace(']','')
+        s += str(acc_list[i]).replace('[','').replace(']','')
+        s = s.replace("'",'').replace(',','') +'\n'
+        file.write(s)
+    s = "Loss"
+    for i in range(len(loss_list)):
+        s += str(loss_list[i]).replace('[','').replace(']','')
         s = s.replace("'",'').replace(',','') +'\n'
         file.write(s)
     file.close()
