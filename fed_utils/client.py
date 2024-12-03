@@ -11,13 +11,44 @@ from peft import (
 
 
 class GeneralClient:
-    def __init__(self, client_id, model, data_path, output_dir):
+    def __init__(self, client_id, model, data_path, output_dir, epoch):
         self.client_id = client_id
         self.model = model
-        self.local_data_path = os.path.join(data_path, "local_training_{}.json".format(self.client_id))
+        self.local_data_path = os.path.join(data_path, f"local_training_{self.client_id}.json")
         self.local_data = load_dataset("json", data_files=self.local_data_path)
         self.output_dir = output_dir
-        self.local_output_dir = os.path.join(self.output_dir, "trainer_saved", "local_output_{}".format(self.client_id))
+        self.local_output_dir = os.path.join(self.output_dir, "trainer_saved", f"local_output_{self.client_id}")
+        
+        # Load aggregated lora_A
+        aggregated_lora_A_path = os.path.join(output_dir, str(epoch), 'aggregated_lora_A.pth')
+        if os.path.exists(aggregated_lora_A_path):
+            aggregated_A = torch.load(aggregated_lora_A_path)
+        else:
+            # First epoch: use model's current lora_A
+            aggregated_A = get_peft_model_state_dict(self.model, adapter_name="default")
+            aggregated_A = {key: value.clone() for key, value in aggregated_A.items() if 'lora_A' in key}
+        
+        # Load client's own lora_B
+        if epoch > 0:
+            client_lora_B_path = os.path.join(output_dir, str(epoch-1), f"local_output_{self.client_id}", 'lora_B.pth')
+            if os.path.exists(client_lora_B_path):
+                client_B = torch.load(client_lora_B_path)
+            else:
+                print(f"Client {self.client_id} lora_B not found for epoch {epoch-1}, using initial lora_B.")
+                client_B = get_peft_model_state_dict(self.model, adapter_name="default")
+                client_B = {key: value.clone() for key, value in client_B.items() if 'lora_B' in key}
+        else:
+            # First epoch: use model's current lora_B
+            client_B = get_peft_model_state_dict(self.model, adapter_name="default")
+            client_B = {key: value.clone() for key, value in client_B.items() if 'lora_B' in key}
+        
+        # Combine aggregated lora_A and client's own lora_B
+        peft_state_dict = {}
+        peft_state_dict.update(aggregated_A)
+        peft_state_dict.update(client_B)
+        
+        # Set the combined PEFT state dict into the model
+        set_peft_model_state_dict(self.model, peft_state_dict, adapter_name="default")
 
     def preprare_local_dataset(self, generate_and_tokenize_prompt, local_val_set_size):
         if local_val_set_size > 0:
@@ -91,11 +122,16 @@ class GeneralClient:
     def terminate_local_training(self, epoch, local_dataset_len_dict, previously_selected_clients_set):
 
         local_dataset_len_dict[self.client_id] = len(self.local_train_dataset)
-        new_adapter_weight = self.model.state_dict()
-        single_output_dir = os.path.join(self.output_dir, str(epoch), "local_output_{}".format(self.client_id))
+        new_adapter_weight = get_peft_model_state_dict(self.model, adapter_name="default")
+        single_output_dir = os.path.join(self.output_dir, str(epoch), f"local_output_{self.client_id}")
         os.makedirs(single_output_dir, exist_ok=True)
-        torch.save(new_adapter_weight, single_output_dir + "/pytorch_model.bin")
-
+        torch.save(new_adapter_weight, os.path.join(single_output_dir, "pytorch_model.bin"))
+        
+        # Save client's own lora_B
+        B_state_dict = {key: value.clone() for key, value in new_adapter_weight.items() if 'lora_B' in key}
+        torch.save(B_state_dict, os.path.join(single_output_dir, 'lora_B.pth'))
+        
+        # Reset model to previous state if needed
         older_adapter_weight = get_peft_model_state_dict(self.model, self.params_dict_old, "default")
         set_peft_model_state_dict(self.model, older_adapter_weight, "default")
         previously_selected_clients_set = previously_selected_clients_set | set({self.client_id})

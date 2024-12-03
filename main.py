@@ -9,7 +9,7 @@ from peft import (
     get_peft_model,
     prepare_model_for_kbit_training,
 )
-from fed_utils import FedAvg, client_selection, global_evaluation, GeneralClient
+from fed_utils import FedAvg, FedSA, FedSA_FLoRA, client_selection, global_evaluation, GeneralClient
 import datasets
 from utils.prompter import Prompter
 import json
@@ -207,13 +207,13 @@ def fl_finetune(
     acc_list = []
 
     for epoch in tqdm(range(num_communication_rounds)):
-
+        
         print("\nConducting the client selection")
         selected_clients_set = client_selection(num_clients, client_selection_frac, client_selection_strategy,
                                                 other_info=epoch)
 
         for client_id in selected_clients_set:
-            client = GeneralClient(client_id, model, data_path, output_dir)
+            client = GeneralClient(client_id, model, data_path, output_dir, epoch)
 
             print("\nPreparing the local dataset and trainer for Client_{}".format(client_id))
             client.preprare_local_dataset(generate_and_tokenize_prompt, local_val_set_size)
@@ -237,12 +237,14 @@ def fl_finetune(
             del client
 
         print("Collecting the weights of clients and performing aggregation")
-        model = FedAvg(model,
-                       selected_clients_set,
-                       output_dir,
-                       local_dataset_len_dict,
-                       epoch,
-                       )
+        model = FedSA(model, selected_clients_set,
+                output_dir,
+                local_dataset_len_dict,
+                epoch,
+                )
+
+        
+
         torch.save(model.state_dict(), os.path.join(output_dir, str(epoch), "adapter_model.bin"))
         config.save_pretrained(output_dir)
 
@@ -251,6 +253,22 @@ def fl_finetune(
         print('Acc of Epoch', str(epoch), 'is:', acc)
         acc_list.append(acc)
 
+
+    # selected_clients_set = client_selection(num_clients, client_selection_frac, client_selection_strategy)
+    # print("\nConducting the LoRA Stacking")
+    # epoch= num_communication_rounds -1
+    # model = FedSA_FLoRA(model,
+    #                 selected_clients_set,
+    #                 output_dir,
+    #                 local_dataset_len_dict, # So that we can average the weights
+    #                 epoch= epoch, # This basacically to retrieve the directory of last selected clients
+    #                 )
+    # torch.save(model.state_dict(), os.path.join(output_dir, str(epoch), "adapter_model.bin"))
+    # config.save_pretrained(output_dir)
+    #  # Please design the evaluation method based on your specific requirements in the fed_utils/evaluation.py file.
+    # acc = global_evaluation(model, tokenizer, prompter, dev_data_path)
+    # print('Acc of Epoch', str(epoch), 'is:', acc)
+    # acc_list.append(acc)
 
     print(acc_list)          
     #os.system("lm_eval --model_args pretrained=huggyllama/llama-7b,parallelize=True,load_in_4bit=False,peft={current_dir} --tasks arc_challenge,mmlu --device cuda --output_path {current_dir}".format(current_dir = os.path.join(output_dir, str(epoch))))
