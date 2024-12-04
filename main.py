@@ -13,6 +13,7 @@ from fed_utils import FedAvg, FedSA, FedSA_FLoRA, client_selection, global_evalu
 import datasets
 from utils.prompter import Prompter
 import json
+import numpy as np
 
 file_path = './HF_key.json'
 with open(file_path, 'r') as file:
@@ -29,7 +30,7 @@ def fl_finetune(
         output_dir: str = './lora-shepherd/',
         # FL hyperparamas
         client_selection_strategy: str = 'random',
-        client_selection_frac: float = 0.1,
+        client_selection_frac: float = 0.5,
         num_communication_rounds: int = 50,
         num_clients: int = 10,
         # Local training hyperparams
@@ -52,6 +53,7 @@ def fl_finetune(
         group_by_length: bool = False,
         resume_from_checkpoint: str = None,  # either training checkpoint or final adapter
         prompt_template_name: str = "alpaca",  # The prompt template to use, will default to alpaca.
+        strategy: str = 'FedSA',
 ):
     if int(os.environ.get("LOCAL_RANK", 0)) == 0:
         print(
@@ -205,6 +207,8 @@ def fl_finetune(
     output_dir = os.path.join(output_dir, str(num_clients))
 
     acc_list = []
+    acc_dict = {}
+
 
     for epoch in tqdm(range(num_communication_rounds)):
         
@@ -230,12 +234,18 @@ def fl_finetune(
 
             print("Local training starts ... ")
             client.train()
-
+           
             print("\nTerminating the local training of Client_{}".format(client_id))
+
+            print('Client_{} has started evaluation'.format(client_id))
+
+            acc = global_evaluation(client.model, tokenizer, prompter, dev_data_path)
+            acc_dict[client_id] = (acc, epoch)
+            print('Local Acc of Client_{} is:'.format(client_id), acc)
+
             model, local_dataset_len_dict, previously_selected_clients_set, last_client_id = client.terminate_local_training(
                 epoch, local_dataset_len_dict, previously_selected_clients_set)
             del client
-
         print("Collecting the weights of clients and performing aggregation")
         model = FedSA(model, selected_clients_set,
                 output_dir,
@@ -249,28 +259,31 @@ def fl_finetune(
         config.save_pretrained(output_dir)
 
         # Please design the evaluation method based on your specific requirements in the fed_utils/evaluation.py file.
-        acc = global_evaluation(model, tokenizer, prompter, dev_data_path)
-        print('Acc of Epoch', str(epoch), 'is:', acc)
-        acc_list.append(acc)
+        print('Avg Local Acc of Epoch', str(epoch), 'is:', acc)
+        acc_list.append(np.mean([acc for acc, e in acc_dict.values() if e == epoch]))
 
 
     # selected_clients_set = client_selection(num_clients, client_selection_frac, client_selection_strategy)
-    # print("\nConducting the LoRA Stacking")
-    # epoch= num_communication_rounds -1
-    # model = FedSA_FLoRA(model,
-    #                 selected_clients_set,
-    #                 output_dir,
-    #                 local_dataset_len_dict, # So that we can average the weights
-    #                 epoch= epoch, # This basacically to retrieve the directory of last selected clients
-    #                 )
-    # torch.save(model.state_dict(), os.path.join(output_dir, str(epoch), "adapter_model.bin"))
-    # config.save_pretrained(output_dir)
-    #  # Please design the evaluation method based on your specific requirements in the fed_utils/evaluation.py file.
-    # acc = global_evaluation(model, tokenizer, prompter, dev_data_path)
-    # print('Acc of Epoch', str(epoch), 'is:', acc)
-    # acc_list.append(acc)
+    if strategy == 'FedSA_FLoRA':
+        print("\nConducting the LoRA Stacking")
+        model = FedSA_FLoRA(model,
+                        previously_selected_clients_set,
+                        output_dir,
+                        local_dataset_len_dict, # So that we can average the weights
+                        epoch= epoch, # This basacically to retrieve the directory of last selected clients
+                        )
+        torch.save(model.state_dict(), os.path.join(output_dir, str(epoch), "adapter_model.bin"))
+        config.save_pretrained(output_dir)
+        # Please design the evaluation method based on your specific requirements in the fed_utils/evaluation.py file.
+        acc = global_evaluation(model, tokenizer, prompter, dev_data_path)
+        print('Global Accuracy after FedSA_FLoRA', str(epoch), 'is:', acc)
+        acc_list.append(acc)
 
-    print(acc_list)          
+    print("Accuracy List:")
+    print(acc_list)     
+    print('Accuracy Dictionary')
+    print(acc_dict)  
+
     #os.system("lm_eval --model_args pretrained=huggyllama/llama-7b,parallelize=True,load_in_4bit=False,peft={current_dir} --tasks arc_challenge,mmlu --device cuda --output_path {current_dir}".format(current_dir = os.path.join(output_dir, str(epoch))))
     filename = output_dir + 'log.txt'
     file = open(filename,'a')
@@ -280,6 +293,9 @@ def fl_finetune(
         file.write(s)
     file.close()
     print("Log Saved")
+
+    with open(output_dir + 'acc_dict.json', 'w') as f:
+        json.dump(acc_dict, f)
 
 
 if __name__ == "__main__":
