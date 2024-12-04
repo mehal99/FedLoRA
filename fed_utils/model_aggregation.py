@@ -5,6 +5,7 @@ from peft import (
 import torch
 import os
 from torch.nn.functional import normalize
+from torch import nn
 
 
 def FedAvg(model, selected_clients_set, output_dir, local_dataset_len_dict, epoch):
@@ -191,21 +192,52 @@ def FedSA_FLoRA(model, selected_clients_set, output_dir, local_dataset_len_dict,
     lora_config.r = new_r
 
     # Rebuild the LoRA layers in the model
+    # for module_name, module in model.named_modules():
+    #     if isinstance(module, LoraLayer):
+    #         # Get the original in_features and out_features
+    #         in_features = module.in_features
+    #         out_features = module.out_features
+
+    #         # Reinitialize the LoRA layers with the new rank
+    #         module.r = new_r
+    #         module.lora_A = torch.nn.Parameter(
+    #             module.lora_A.new_zeros((new_r, in_features))
+    #         )
+    #         module.lora_B = torch.nn.Parameter(
+    #             module.lora_B.new_zeros((out_features, new_r))
+    #         )
+    #         module.scaling = lora_config.lora_alpha / new_r
     for module_name, module in model.named_modules():
         if isinstance(module, LoraLayer):
-            # Get the original in_features and out_features
             in_features = module.in_features
             out_features = module.out_features
 
-            # Reinitialize the LoRA layers with the new rank
+            # Update rank
             module.r = new_r
-            module.lora_A = torch.nn.Parameter(
-                module.lora_A.new_zeros((new_r, in_features))
-            )
-            module.lora_B = torch.nn.Parameter(
-                module.lora_B.new_zeros((out_features, new_r))
-            )
-            module.scaling = lora_config.lora_alpha / new_r
+            # print('Reinitializing LoraLayer:')
+            # print(module)
+
+            # Reinitialize lora_A and lora_B within the ModuleDict
+            # Assuming 'default' is the key used in ModuleDict
+            # Update lora_A
+            if 'default' in module.lora_A:
+                module.lora_A['default'] = torch.nn.Linear(in_features, new_r, bias=False, device='cuda:0')
+                torch.nn.init.zeros_(module.lora_A['default'].weight)
+            else:
+                raise KeyError(f"'default' key not found in lora_A of module {module_name}")
+
+            # Update lora_B
+            if 'default' in module.lora_B:
+                module.lora_B['default'] = torch.nn.Linear(new_r, out_features, bias=False, device='cuda:0')
+                torch.nn.init.zeros_(module.lora_B['default'].weight)
+            else:
+                raise KeyError(f"'default' key not found in lora_B of module {module_name}")
+
+
+
+
+            # print('After Reinitializing LoraLayer:')
+            # print(module)
 
 
 
@@ -219,7 +251,7 @@ def FedSA_FLoRA(model, selected_clients_set, output_dir, local_dataset_len_dict,
     # Apply the stacked lora_B
     for key in stacked_B.keys():
         global_peft_state_dict[key] = stacked_B[key]
-
+    print(model)
     set_peft_model_state_dict(model, global_peft_state_dict, adapter_name="default")
 
     return model

@@ -81,12 +81,13 @@ def fl_finetune(
             f"group_by_length: {group_by_length}\n"
             f"resume_from_checkpoint: {resume_from_checkpoint or False}\n"
             f"prompt template: {prompt_template_name}\n"
+            f"alpha: {alpha}\n"    
         )
     assert (
         global_model
     ), "Please specify a --global_model, e.g. --global_modell='decapoda-research/llama-7b-hf'"
 
-    data_path = os.path.join(data_path, f"{num_clients}_{alpha}")
+    data_path = os.path.join(data_path, f"{num_clients}")
     assert (os.path.exists(data_path), "Please generate the data files for each client")
 
     # set up the global model & toknizer
@@ -205,7 +206,7 @@ def fl_finetune(
     previously_selected_clients_set = set()
     last_client_id = None
     local_dataset_len_dict = dict()
-    output_dir = os.path.join(output_dir, str(num_clients))
+    output_dir = os.path.join(output_dir, f"{num_clients}_{alpha}")
 
     acc_list = []
     acc_dict = {}
