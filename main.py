@@ -26,6 +26,7 @@ def fl_finetune(
         # model/data params
         global_model: str = '',
         data_path: str = './data',
+        alpha: float = 0.1,
         dev_data_path: str = './mmlu_test_1444.jsonl',
         output_dir: str = './lora-shepherd/',
         # FL hyperparamas
@@ -85,7 +86,7 @@ def fl_finetune(
         global_model
     ), "Please specify a --global_model, e.g. --global_modell='decapoda-research/llama-7b-hf'"
 
-    data_path = os.path.join(data_path, str(num_clients))
+    data_path = os.path.join(data_path, f"{num_clients}_{alpha}")
     assert (os.path.exists(data_path), "Please generate the data files for each client")
 
     # set up the global model & toknizer

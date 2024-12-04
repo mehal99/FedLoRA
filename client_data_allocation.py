@@ -8,6 +8,7 @@ import pdb
 
 num_clients = int(sys.argv[1])
 diff_quantity = int(sys.argv[2])
+alpha = int(sys.argv[3])
 
 seed = 42
 np.random.seed(seed)
@@ -42,7 +43,7 @@ alpaca_remaining_df = alpaca_sorted_df.drop(index=alpaca_sampled_df.index)
 
 sampled_df = sampled_df.reset_index().drop('index', axis=1)
 remaining_df = remaining_df.reset_index().drop('index', axis=1)
-data_path = os.path.join("data", str(num_clients))
+data_path = os.path.join("data", f"{num_clients}_{alpha}")
 
 os.makedirs(data_path,exist_ok=True)
 
@@ -59,7 +60,7 @@ with open(os.path.join(data_path, "global_test.json"), 'w') as outfile:
 if diff_quantity:
     min_size = 0
     min_require_size = 40
-    alpha = 0.5
+    # alpha = 0.5
 
     N = len(remaining_df)
     net_dataidx_map = {}
