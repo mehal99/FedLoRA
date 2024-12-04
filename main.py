@@ -241,7 +241,7 @@ def fl_finetune(
             print('Client_{} has started evaluation'.format(client_id))
 
             acc = global_evaluation(client.model, tokenizer, prompter, dev_data_path)
-            acc_dict[client_id] = (acc, epoch)
+            acc_dict[str(client_id)] = (acc, epoch)
             print('Local Acc of Client_{} is:'.format(client_id), acc)
 
             model, local_dataset_len_dict, previously_selected_clients_set, last_client_id = client.terminate_local_training(
